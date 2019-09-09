@@ -1,0 +1,100 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Arne Schoch"
+date: "9/9/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Aim of the project
+Predict classe response based on movement predictors.
+
+```{r test / training}
+training <- read.csv("pml-training.csv", header = TRUE, row.names = 1)
+testing <- read.csv("pml-testing.csv", header = TRUE, row.names = 1)
+
+str(training)
+```
+Some of the predictors appear to exhibit a large number of NA-values. Which predictors have more than 50% NA-observations and/or blank values?
+
+```{r na}
+index_na <- vector()
+counter <- 1
+
+for(i in 1:ncol(training)){
+  ratio_na <- as.data.frame(prop.table(table(is.na(training[,i]))))
+  
+  if(ratio_na$Freq[ratio_na$Var1 == FALSE] < 0.5 | sum(training[,i] == "") > 1){
+    index_na[counter] <- i
+    counter <- counter+1
+  }
+}
+```
+In a more elaborate walkthrough, you could try to impute the missing values for the "NA-rich" predictors. For now, I will discard respective predictors. Note that there are no more NA-values in the training dataset. Therefore, there is no need for imputation later on. If imputation was needed, I would probably use a proximity matrix to do so, since I will classify the data based on the random Forest method.
+
+I will also remove the timestamp-columns.
+```{r}
+# does the testing data have the same column order as the training data?
+check_col <- colnames(training) == colnames(testing)
+which(check_col == FALSE)
+
+# the last column holds different variables in training and testing data, the others are the same
+
+# delete na-rich or blank-rich predictors
+training <- training[,-index_na]
+testing <- testing[,-index_na]
+
+# delete time stamp columns
+training <- training[,-(2:4)]
+testing <- testing[,-(2:4)]
+```
+Let's try to classify the data using the randomForest method.
+First, we split the data to allow for cross-validation.
+
+Random forest computation takes a long time without parallelization. Hence, I will use the parallel and doParallel package to reduce time expenses.
+```{r}
+library(caret)
+library(parallel)
+library(doParallel)
+library(ggplot2)
+set.seed(42)
+
+# define cluster
+cluster <- makeCluster(detectCores() - 1) 
+registerDoParallel(cluster)
+
+# define 5-fold cross-validation
+trControl <- trainControl(method="cv", number=5, allowParallel = TRUE)
+
+# create random forest model
+model_rf <- train(classe~., data=training, method="rf", trControl=trControl, verbose=FALSE)
+
+# shutting down cluster after successful computation
+stopCluster(cluster)
+registerDoSEQ()
+```
+The random forest has one major hyperparameter, mtry, i.e. the number of randomly selected predictors per node. Since I applied cross-validation, I can estimate an optimal mtry-value based on cross-validation accuracy.
+```{r}
+plot(model_rf, pch = 19)
+abline
+```
+If I had more computational power and more time, I would scan more than three mtry-values. For now, I will build my final model with mtry=30 since it provided the best accuracy.
+
+Note that cross-validation can also provide a good estimate of the out of sample error.
+```{r}
+model_rf$resample
+```
+The accuracy in each fold is very high. Less than 1% of the observations were incorrectly classified. I assume that the model will perform similarly well on similar data.
+
+Let's predict classe for the 20 test observations.
+```{r}
+predictions <- predict(model_rf, newdata = testing[,-56])
+```
+Finally, let's save the predictions in an appropriate format.
+```{r}
+results <- data.frame(problem_id = testing$problem_id, predictions = predictions)
+write.csv(results, "Predictions_ArneSchoch.csv")
+```
